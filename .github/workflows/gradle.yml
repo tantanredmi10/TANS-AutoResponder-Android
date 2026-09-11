@@ -24,11 +24,14 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Build APK
-        run: gradle :app:assembleDebug
+      - name: Build release APK
+        run: gradle :app:assembleRelease
 
-      - name: Upload APK
+      - name: Rename release APK
+        run: cp app/build/outputs/apk/release/app-release.apk TANS-AutoResponder-v2.1-release.apk
+
+      - name: Upload release APK
         uses: actions/upload-artifact@v4
         with:
-          name: TANS-AutoResponder-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: TANS-AutoResponder-v2.1-Release
+          path: TANS-AutoResponder-v2.1-release.apk
