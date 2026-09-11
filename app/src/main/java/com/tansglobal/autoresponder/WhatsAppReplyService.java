@@ -8,6 +8,9 @@ import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.service.notification.NotificationListenerService;
 import android.service.notification.StatusBarNotification;
+import java.text.SimpleDateFormat;
+import java.util.Calendar;
+import java.util.Date;
 import java.util.Locale;
 
 public class WhatsAppReplyService extends NotificationListenerService {
@@ -29,25 +32,47 @@ public class WhatsAppReplyService extends NotificationListenerService {
         if (message.trim().isEmpty()) return;
 
         long now = System.currentTimeMillis();
-        if (title.equals(lastConversation) && now - lastReplyAt < 60_000L) return;
+        int cooldownMinutes = Math.max(1, p.getInt("cooldownMinutes", 3));
+        long cooldownMs = cooldownMinutes * 60_000L;
+        if (title.equals(lastConversation) && now - lastReplyAt < cooldownMs) return;
 
-        String reply = choose(message, p);
-        if (sendReply(n, reply)) {
+        Choice choice = choose(message, p);
+        if (p.getBoolean("businessHoursOnly", false) && !isBusinessHour(p)) {
+            choice = new Choice("DI LUAR JAM", p.getString("outHours", Defaults.OUT_OF_HOURS));
+        }
+
+        if (sendReply(n, choice.text)) {
             lastConversation = title;
             lastReplyAt = now;
+            appendLog(p, title, choice.category, message);
         }
     }
 
-    private String choose(String m, SharedPreferences p) {
+    private Choice choose(String m, SharedPreferences p) {
         String s = m.toLowerCase(Locale.ROOT);
-        if (has(s,"kontraktor","proyek","pekerjaan","spk","tender")) return p.getString("contractor", Defaults.CONTRACTOR);
-        if (has(s,"supplier","material","barang","semen","besi","baja","pasir","beton")) return p.getString("supplier", Defaults.SUPPLIER);
-        if (has(s,"survey","survei","lokasi","site visit")) return p.getString("survey", Defaults.SURVEY);
-        if (has(s,"penawaran","rab","harga","quotation","boq","estimasi")) return p.getString("quotation", Defaults.QUOTATION);
-        if (has(s,"halo","hallo","hai","assalamualaikum","selamat pagi","selamat siang","selamat sore","selamat malam")) return p.getString("greeting", Defaults.GREETING);
-        return p.getString("fallback", Defaults.FALLBACK);
+        if (has(s,"tender","spk","pengadaan","lelang","pagu")) return new Choice("TENDER/SPK", p.getString("tender", Defaults.TENDER));
+        if (has(s,"kontraktor","proyek","pekerjaan","borongan","konstruksi")) return new Choice("KONTRAKTOR", p.getString("contractor", Defaults.CONTRACTOR));
+        if (has(s,"supplier","material","barang","semen","besi","baja","pasir","beton","pengiriman")) return new Choice("SUPPLIER", p.getString("supplier", Defaults.SUPPLIER));
+        if (has(s,"survey","survei","lokasi","site visit","kunjungan")) return new Choice("SURVEY", p.getString("survey", Defaults.SURVEY));
+        if (has(s,"penawaran","rab","harga","quotation","boq","estimasi","proposal")) return new Choice("PENAWARAN", p.getString("quotation", Defaults.QUOTATION));
+        if (has(s,"profil","profile","tentang perusahaan","perusahaan apa","bidang usaha","layanan")) return new Choice("PROFIL", p.getString("profile", Defaults.PROFILE));
+        if (has(s,"halo","hallo","hai","assalamualaikum","selamat pagi","selamat siang","selamat sore","selamat malam")) return new Choice("SAPaan", p.getString("greeting", Defaults.GREETING));
+        return new Choice("UMUM", p.getString("fallback", Defaults.FALLBACK));
     }
-    private boolean has(String s, String... ks){ for(String k:ks) if(s.contains(k)) return true; return false; }
+
+    private boolean isBusinessHour(SharedPreferences p) {
+        int start = p.getInt("startHour", 8);
+        int end = p.getInt("endHour", 17);
+        int hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY);
+        if (start == end) return true;
+        if (start < end) return hour >= start && hour < end;
+        return hour >= start || hour < end;
+    }
+
+    private boolean has(String s, String... ks){
+        for(String k:ks) if(s.contains(k)) return true;
+        return false;
+    }
 
     private boolean sendReply(Notification n, String text) {
         Notification.Action[] actions = n.actions;
@@ -59,9 +84,33 @@ public class WhatsAppReplyService extends NotificationListenerService {
             Bundle results = new Bundle();
             for (RemoteInput ri : inputs) results.putCharSequence(ri.getResultKey(), text);
             RemoteInput.addResultsToIntent(inputs, intent, results);
-            try { a.actionIntent.send(this, 0, intent); return true; }
-            catch (PendingIntent.CanceledException ignored) { }
+            try {
+                a.actionIntent.send(this, 0, intent);
+                return true;
+            } catch (PendingIntent.CanceledException ignored) { }
         }
         return false;
+    }
+
+    private void appendLog(SharedPreferences p, String title, String category, String message) {
+        String clean = message.replace('\n',' ').replace('\r',' ').trim();
+        if (clean.length() > 60) clean = clean.substring(0, 60) + "…";
+        String time = new SimpleDateFormat("dd/MM HH:mm", Locale.getDefault()).format(new Date());
+        String entry = time + " | " + category + " | " + (title.trim().isEmpty() ? "WhatsApp" : title) + "\n" + clean;
+        String old = p.getString("logs", "");
+        String merged = entry + (old.trim().isEmpty() ? "" : "\n\n" + old);
+        String[] blocks = merged.split("\\n\\n");
+        StringBuilder out = new StringBuilder();
+        for (int i=0; i<blocks.length && i<15; i++) {
+            if (i>0) out.append("\n\n");
+            out.append(blocks[i]);
+        }
+        p.edit().putString("logs", out.toString()).apply();
+    }
+
+    private static class Choice {
+        final String category;
+        final String text;
+        Choice(String category, String text){ this.category=category; this.text=text; }
     }
 }
